@@ -1,15 +1,95 @@
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using WebApplication1.Data;
 using WebApplication1.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Render sets PORT dynamically; bind to 0.0.0.0
 var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
+// Helper: Neon gives postgresql:// URL, Npgsql prefers Host=...; also support Render's DATABASE_URL
+string? rawConn = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? Environment.GetEnvironmentVariable("DATABASE_URL")
+    ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection");
+
+string? connectionString = null;
+if (!string.IsNullOrWhiteSpace(rawConn))
+{
+    rawConn = rawConn.Trim();
+    // If it's a postgres URL, convert to Npgsql key=value format
+    if (rawConn.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) ||
+        rawConn.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+    {
+        try
+        {
+            var uri = new Uri(rawConn);
+            var userInfo = uri.UserInfo.Split(':', 2);
+            var npgBuilder = new NpgsqlConnectionStringBuilder
+            {
+                Host = uri.Host,
+                Port = uri.Port > 0 ? uri.Port : 5432,
+                Database = uri.AbsolutePath.Trim('/'),
+                Username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : "",
+                Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "",
+                SslMode = SslMode.Require
+            };
+            // Parse query for channel_binding (simple, avoid System.Web dependency)
+            if (!string.IsNullOrEmpty(uri.Query))
+            {
+                var query = uri.Query.TrimStart('?');
+                foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var kv = part.Split('=', 2);
+                    if (kv.Length == 2 && kv[0].Equals("channel_binding", StringComparison.OrdinalIgnoreCase)
+                        && kv[1].Equals("require", StringComparison.OrdinalIgnoreCase))
+                    {
+                        npgBuilder.ChannelBinding = ChannelBinding.Require;
+                        break;
+                    }
+                }
+            }
+            connectionString = npgBuilder.ConnectionString;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Failed to parse DATABASE_URL, using raw: {ex.Message}");
+            connectionString = rawConn;
+        }
+    }
+    else
+    {
+        connectionString = rawConn;
+    }
+}
+
+// Fallback to placeholder if still null (will fail visibly on startup, logs host-sanitized)
+if (string.IsNullOrWhiteSpace(connectionString))
+{
+    connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+}
+
+// Log sanitized host for debugging on Render (never log password)
+try
+{
+    var sanitized = new NpgsqlConnectionStringBuilder(connectionString).Host;
+    Console.WriteLine($"[DB] Using host: {sanitized}");
+}
+catch { Console.WriteLine("[DB] Connection string configured (host parse failed)"); }
+
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseNpgsql(connectionString));
+
+// Render runs behind proxy - forward headers so https detection works; avoid redirect loop
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 {
@@ -34,19 +114,39 @@ builder.Services.AddControllersWithViews();
 
 var app = builder.Build();
 
+// Forward headers must run early when behind Render
+app.UseForwardedHeaders();
+
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
     try
     {
         var context = services.GetRequiredService<ApplicationDbContext>();
-        await context.Database.EnsureCreatedAsync();
+        // Retry once for Neon cold-start
+        var retries = 0;
+        while (true)
+        {
+            try
+            {
+                await context.Database.EnsureCreatedAsync();
+                break;
+            }
+            catch (Exception retryEx) when (retries < 1)
+            {
+                retries++;
+                Console.WriteLine($"[DB] EnsureCreated retry {retries}: {retryEx.Message}");
+                await Task.Delay(2000);
+            }
+        }
         await SeedData.InitializeAsync(services);
+        Console.WriteLine("[DB] Database ready");
     }
     catch (Exception ex)
     {
         var logger = services.GetRequiredService<ILogger<Program>>();
-        logger.LogError(ex, "An error occurred while initializing the database.");
+        logger.LogError(ex, "An error occurred while initializing the database. Connection host: {Host}", "see previous [DB] log");
+        // Don't crash app - allow health check to respond; user will see error in logs
     }
 }
 
@@ -56,7 +156,12 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+// Disable https redirect on Render (Render terminates TLS, causes loop). Only redirect locally.
+var isRender = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RENDER"));
+if (!isRender)
+{
+    app.UseHttpsRedirection();
+}
 app.UseStaticFiles();
 app.UseRouting();
 
