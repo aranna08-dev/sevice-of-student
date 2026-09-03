@@ -5,11 +5,26 @@ using Npgsql;
 using WebApplication1.Data;
 using WebApplication1.Models;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    // FIX for Render inotify limit (128) — do not watch json files for reload; polling watcher
+    // This prevents: System.IO.IOException: The configured user limit (128) on the number of inotify instances has been reached
+    WebRootPath = "wwwroot"
+});
+// Disable reloadOnChange for all config sources (Render's inotify limit)
+foreach (var src in builder.Configuration.Sources.ToList())
+{
+    if (src is Microsoft.Extensions.Configuration.Json.JsonConfigurationSource jsonSrc)
+        jsonSrc.ReloadOnChange = false;
+}
 
 // Render sets PORT dynamically; bind to 0.0.0.0
 var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+
+// Also tell PhysicalFileProvider to use polling instead of inotify where needed
+Environment.SetEnvironmentVariable("DOTNET_USE_POLLING_FILE_WATCHER", "true");
 
 // Helper: Neon gives postgresql:// URL, Npgsql prefers Host=...; also support Render's DATABASE_URL
 string? rawConn = builder.Configuration.GetConnectionString("DefaultConnection")

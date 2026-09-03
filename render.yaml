@@ -8,6 +8,10 @@ services:
         value: Production
       - key: RENDER
         value: "true"
+      - key: DOTNET_USE_POLLING_FILE_WATCHER
+        value: "true"
+      - key: DOTNET_HOSTBUILDER__RELOADCONFIGONCHANGE
+        value: "false"
       - key: ConnectionStrings__DefaultConnection
         sync: false
       # Also accepts DATABASE_URL (Neon URL format) as fallback — set either one.

@@ -49,3 +49,8 @@ project.assets.json
 NEON_CONNECTION_PRIVATE.txt
 WebApplication1/appsettings.json.real
 
+
+# Reports - keep local only
+*.docx
+~$*.docx
+
