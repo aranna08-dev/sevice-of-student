@@ -138,19 +138,19 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var context = services.GetRequiredService<ApplicationDbContext>();
-        // Retry once for Neon cold-start
+        // Retry once for Neon cold-start — use Migrate (not EnsureCreated) for proper migrations
         var retries = 0;
         while (true)
         {
             try
             {
-                await context.Database.EnsureCreatedAsync();
+                await context.Database.MigrateAsync();
                 break;
             }
             catch (Exception retryEx) when (retries < 1)
             {
                 retries++;
-                Console.WriteLine($"[DB] EnsureCreated retry {retries}: {retryEx.Message}");
+                Console.WriteLine($"[DB] Migrate retry {retries}: {retryEx.Message}");
                 await Task.Delay(2000);
             }
         }
