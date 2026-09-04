@@ -20,19 +20,19 @@ namespace WebApplication1.Data
                 }
             }
 
-            string staffEmail = "maya@iubat.com";
+            string staffEmail = "ararra@iubat.edu";
             if (await userManager.FindByEmailAsync(staffEmail) == null)
             {
                 var staffUser = new ApplicationUser
                 {
                     UserName = staffEmail,
                     Email = staffEmail,
-                    FirstName = "Maya",
+                    FirstName = "Ararra",
                     LastName = "IUBAT",
                     EmailConfirmed = true
                 };
 
-                var result = await userManager.CreateAsync(staffUser, "M@Y@123");
+                var result = await userManager.CreateAsync(staffUser, "P@ssW0rd");
                 if (result.Succeeded)
                 {
                     await userManager.AddToRoleAsync(staffUser, "Staff");
