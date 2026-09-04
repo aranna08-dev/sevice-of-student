@@ -20,14 +20,14 @@ namespace WebApplication1.Data
                 }
             }
 
-            string staffEmail = "ararra@iubat.edu";
+            string staffEmail = "aranna@iubat.edu";
             if (await userManager.FindByEmailAsync(staffEmail) == null)
             {
                 var staffUser = new ApplicationUser
                 {
                     UserName = staffEmail,
                     Email = staffEmail,
-                    FirstName = "Ararra",
+                    FirstName = "Aranna",
                     LastName = "IUBAT",
                     EmailConfirmed = true
                 };
